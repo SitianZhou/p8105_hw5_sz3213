@@ -5,12 +5,164 @@ date: "2023-11-05"
 output: github_document
 ---
 
+```{r}
+library(tidyverse)
+```
 
 
 
+## Problem 1
+
+```{r}
+homicide <-
+  read_csv("data/homicide-data.csv") |> 
+  mutate(
+    city_state = str_c(city, ", ", state)
+  )
+```
+The dataset `homicide` contains information about homicide cases in United States from 2007 to 2017. It contains `r nrow(homicide)` rows and `r ncol(homicide)` variable, where each row is a criminal homicide case. The dataset includes the time the case was reported, the information about victims, the location of killing, and whether an arrest was made. 
+
+```{r}
+homicide |> 
+  count(city_state)
+
+homicide |> 
+  filter(str_detect(disposition, "Open|without")) |> 
+  count(city_state)
+
+homicide_Baltimore <-
+  homicide |> 
+  filter(city_state == "Baltimore, MD")|> 
+  count(disposition)
+
+prop_res <- 
+  prop.test(x = homicide_Baltimore$n[[2]] + homicide_Baltimore$n[[3]], 
+          n = sum(homicide_Baltimore$n), 
+          p = 0.5) |> 
+  broom::tidy()
+
+prop_res |> 
+  pull(estimate, conf.low)
+
+```
+
+## Problem 2
+
+
+```{r}
+files = list.files(path = "data", pattern = "*_[0-9]")
+file_name = str_c("data/",files)
+
+```
+
+
+```{r}
+patient_id = rep(1:10, times = 2)
+arm = rep(c("con","exp"),each = 10)
+
+res_df <-
+  tibble(
+    patient_id = patient_id,
+    arm = arm
+  )
+
+# loading datasets
+res_df <-
+  res_df |> 
+  mutate(
+    data = map(file_name, read_csv)
+  ) |> 
+  unnest()
+
+# tidy
+res_df_clean <-
+  res_df |> 
+  pivot_longer(
+    week_1:week_8,
+    names_to = "week",
+    names_prefix = "week_",
+    values_to = "value"
+  ) |> 
+  mutate(
+    week = as.numeric(week),
+    patient_id = as.factor(patient_id)
+  )
+
+
+```
+
+
+```{r}
+ggplot(data = res_df_clean, aes(x = week, y = value, color = patient_id)) +
+  geom_line() +
+  facet_grid(arm ~ .)
+```
+
+### comment on differences between groups
+
+## Problem 3
+
+```{r}
+sim_t_test = function(mu, n = 30, sd = 5) {
+  x_vec = rnorm(n, mu, sd)
+  t.test(x_vec) |> 
+  broom::tidy() |> 
+  select(
+    mu_hat = estimate,
+    p_val = p.value
+  )
+  
+}
+
+####
+output = vector("list", length = 5000)
+
+for (i in 1:5000) {
+  output[[i]] = sim_t_test(0)
+  
+}
+
+sim_res <-
+  bind_rows(output)
 
 
 
+sim_res_df = 
+  expand_grid(
+    mu = c(1, 2, 3, 4, 5, 6), 
+    iter = 1:5000
+  ) |> 
+  mutate(
+    est_df = map(mu, sim_t_test)
+  ) |> 
+  unnest(cols = c(est_df))
+
+sim_res_df |> 
+  group_by(mu) |> 
+  summarize(rej_prop = sum(p_val < 0.05) / 5000) |> 
+  ggplot(aes(x = mu, y = rej_prop)) +
+  geom_point() + geom_line()
+
+estimate_df <-
+  sim_res_df |> 
+  group_by(mu) |> 
+  summarize(mean_mu_hat = mean(mu_hat))
+
+
+estimate_rej_df <-
+  sim_res_df |> 
+  mutate(
+    decision = ifelse(p_val < 0.05, "rej", "fail")
+  ) |> 
+  filter(decision == "rej") |> 
+  group_by(mu, decision) |> 
+  summarize(mean_mu_hat = mean(mu_hat))
+
+ggplot(estimate_df, aes(x = mu, y = mean_mu_hat)) + geom_line() + geom_point() +
+  geom_line(data = estimate_rej_df, color = "red") + 
+  geom_point(data = estimate_rej_df, color = "red")
+
+```
 
 
 
