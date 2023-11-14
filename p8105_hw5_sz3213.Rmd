@@ -5,8 +5,16 @@ date: "2023-11-05"
 output: github_document
 ---
 
-```{r}
+```{r, message=FALSE}
 library(tidyverse)
+
+knitr::opts_chunk$set(
+	warning = FALSE,
+	message = FALSE,
+	fig.width = 12, 
+	fig.height = 9)
+
+theme_set(theme_minimal())
 ```
 
 
@@ -15,36 +23,74 @@ library(tidyverse)
 
 ```{r}
 homicide <-
-  read_csv("data/homicide-data.csv") |> 
+  read_csv("data/homicide-data.csv", na = c("", "NA", "Unknown")) |> 
   mutate(
-    city_state = str_c(city, ", ", state)
-  )
+    city_state = str_c(city, ", ", state),
+    resolved = as.numeric(disposition == "Closed by arrest")
+  ) |> 
+  filter(city_state != "Tulsa, AL") 
 ```
 The dataset `homicide` contains information about homicide cases in United States from 2007 to 2017. It contains `r nrow(homicide)` rows and `r ncol(homicide)` variable, where each row is a criminal homicide case. The dataset includes the time the case was reported, the information about victims, the location of killing, and whether an arrest was made. 
 
+The following codes create tables that summarize the total number of homicides and the number of unsolved homicides across cities.
 ```{r}
+# total number of homicides
 homicide |> 
-  count(city_state)
-
+  count(city_state) |> 
+  knitr::kable()
+# number of unsolved homicides
 homicide |> 
-  filter(str_detect(disposition, "Open|without")) |> 
-  count(city_state)
+  filter(resolved == 0) |> 
+  count(city_state) |> 
+  knitr::kable()
+```
 
-homicide_Baltimore <-
-  homicide |> 
-  filter(city_state == "Baltimore, MD")|> 
-  count(disposition)
+The estimated proportion of unresolved homicides and its confidence interval in Baltimore.
 
-prop_res <- 
-  prop.test(x = homicide_Baltimore$n[[2]] + homicide_Baltimore$n[[3]], 
-          n = sum(homicide_Baltimore$n), 
-          p = 0.5) |> 
-  broom::tidy()
+```{r}
+homicide_summary <-
+  homicide %>% 
+  group_by(city_state) %>% 
+  summarize(
+    case_total = n(),
+    case_unsolved = sum(resolved == 0))
 
+
+prop_res_Baltimore <-
+  prop.test(
+    x = filter(homicide_summary, city_state == "Baltimore, MD") |> pull(case_unsolved),
+    n = filter(homicide_summary, city_state == "Baltimore, MD") |> pull(case_total))
+
+prop_res_Baltimore|>
+  broom::tidy() |> 
+  select(estimate, conf.low, conf.high) |> 
+  knitr::kable(digits = 3)
+```
+
+
+```{r}
+prop_res = 
+  homicide_summary |> 
+  mutate(
+    prop_tests = map2(case_unsolved, case_total, \(x, y) prop.test(x = x, n = y)),
+    tidy_tests = map(prop_tests, broom::tidy)) |> 
+  select(-prop_tests) |>  
+  unnest(tidy_tests) |>  
+  select(city_state, estimate, conf.low, conf.high) |> 
+  mutate(city_state = fct_reorder(city_state, estimate))
+```
+
+
+
+```{r}
 prop_res |> 
-  pull(estimate, conf.low)
+  mutate(city_state = fct_reorder(city_state, estimate)) |> 
+  ggplot(aes(x = estimate, y = city_state)) + 
+  geom_point() + 
+  geom_errorbar(aes(xmin = conf.low, xmax = conf.high))
 
 ```
+
 
 ## Problem 2
 
@@ -95,10 +141,15 @@ res_df_clean <-
 ```{r}
 ggplot(data = res_df_clean, aes(x = week, y = value, color = patient_id)) +
   geom_line() +
-  facet_grid(arm ~ .)
+  facet_grid(arm ~ .) +
+  labs(title = "Values for each patient in control and experimental arms over time")
 ```
 
 ### comment on differences between groups
+
+The values of ten participants in the control arm remain stable across eight weeks, while in the experimental arm, the value increases across eight weeks.
+
+
 
 ## Problem 3
 
@@ -114,19 +165,17 @@ sim_t_test = function(mu, n = 30, sd = 5) {
   
 }
 
-####
+# mu = 0
 output = vector("list", length = 5000)
 
 for (i in 1:5000) {
   output[[i]] = sim_t_test(0)
-  
 }
 
 sim_res <-
   bind_rows(output)
 
-
-
+# simulation for mu = 1:6
 sim_res_df = 
   expand_grid(
     mu = c(1, 2, 3, 4, 5, 6), 
@@ -137,12 +186,19 @@ sim_res_df =
   ) |> 
   unnest(cols = c(est_df))
 
+# plot the results
 sim_res_df |> 
   group_by(mu) |> 
   summarize(rej_prop = sum(p_val < 0.05) / 5000) |> 
   ggplot(aes(x = mu, y = rej_prop)) +
-  geom_point() + geom_line()
+  geom_point() + geom_line() +
+  labs(title = "Reject proportion across true mean", y = "reject proportion")
+```
 
+As the effect size increases, the rejection proportion increases and finally reaches 100% for $\mu$ = 5 and $\mu$ = 6. This indicates the power of the test increases and finally reaches to 1 when the effect size increases.
+
+
+```{r}
 estimate_df <-
   sim_res_df |> 
   group_by(mu) |> 
@@ -158,11 +214,21 @@ estimate_rej_df <-
   group_by(mu, decision) |> 
   summarize(mean_mu_hat = mean(mu_hat))
 
-ggplot(estimate_df, aes(x = mu, y = mean_mu_hat)) + geom_line() + geom_point() +
-  geom_line(data = estimate_rej_df, color = "red") + 
-  geom_point(data = estimate_rej_df, color = "red")
+ggplot(estimate_df, aes(x = mu, y = mean_mu_hat, color = "black")) + geom_line() + geom_point() +
+  geom_line(data = estimate_rej_df, aes(color = "red")) + 
+  geom_point(data = estimate_rej_df, aes(color = "red")) +
+  labs(title = "Total estimates mean vs. rejected estimates mean",
+       y = "estimates mean") +
+  scale_color_manual(name = "Legend", 
+                     values = c("black" = "black", "red" = "red"),
+                     labels = c('total estimates','rejected estimates'))
 
 ```
+
+
+
+The sample mean of $\hat{\mu}$ for tests with null rejected is greater than the true $\mu$ when the effect size is small ($\mu$ = 1 or 2). Small effect size is also associated with low rejection proportion, which implies a large proportion of samples have means close to 0. This further implies the mean for the rest of the samples will be greater than the true mean.  As true $\mu$ increases, the sample mean of $\hat{\mu}$ for tests with null rejected gets closer to the true $\mu$. This aligns with the behavior of rejection proportion for large effect size. 
+
 
 
 
